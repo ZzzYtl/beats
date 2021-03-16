@@ -29,6 +29,7 @@ type mysqlConfig struct {
 	MaxRowLength          int           `config:"max_row_length"`
 	MaxRows               int           `config:"max_rows"`
 	StatementTimeout      time.Duration `config:"statement_timeout"`
+	AliveTimeOut		  time.Duration `config:"alive_timeout"`
 }
 
 var (
@@ -39,5 +40,6 @@ var (
 		MaxRowLength:     1024,
 		MaxRows:          10,
 		StatementTimeout: 3600 * time.Second,
+		AliveTimeOut: 	3600 * time.Second,
 	}
 )

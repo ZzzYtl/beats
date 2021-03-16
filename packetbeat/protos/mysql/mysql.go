@@ -18,6 +18,7 @@
 package mysql
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -37,17 +38,62 @@ import (
 
 // Packet types
 const (
+	mysqlCmdQuit        = 1
 	mysqlCmdQuery       = 3
+	mysqlComPing		= 14
 	mysqlCmdStmtPrepare = 22
 	mysqlCmdStmtExecute = 23
 	mysqlCmdStmtClose   = 25
 )
 
+// Header information.
+const (
+	OKHeader          byte = 0x00
+	ErrHeader         byte = 0xff
+	EOFHeader         byte = 0xfe
+	LocalInFileHeader byte = 0xfb
+)
+
 const maxPayloadSize = 100 * 1024
+const MinProtocolVersion byte = 10
 
 var (
 	unmatchedRequests  = monitoring.NewInt(nil, "mysql.unmatched_requests")
 	unmatchedResponses = monitoring.NewInt(nil, "mysql.unmatched_responses")
+)
+
+const (
+	statusIncomplete       = iota // The entire query hasn't arrived yet (>16MB)
+	statusInitialHandshake = iota
+	statusWaiting          = iota // The query was sent and we're waiting for a response
+	statusDone             = iota // The query was successfully processed
+	statusError            = iota // The query failed
+)
+
+// Client information.
+const (
+	ClientLongPassword uint32 = 1 << iota
+	ClientFoundRows
+	ClientLongFlag
+	ClientConnectWithDB
+	ClientNoSchema
+	ClientCompress
+	ClientODBC
+	ClientLocalFiles
+	ClientIgnoreSpace
+	ClientProtocol41
+	ClientInteractive
+	ClientSSL
+	ClientIgnoreSigpipe
+	ClientTransactions
+	ClientReserved
+	ClientSecureConnection
+	ClientMultiStatements
+	ClientMultiResults
+	ClientPSMultiResults
+	ClientPluginAuth
+	ClientConnectAtts
+	ClientPluginAuthLenencClientData
 )
 
 type mysqlMessage struct {
@@ -87,18 +133,19 @@ type mysqlMessage struct {
 }
 
 type mysqlTransaction struct {
-	tuple    common.TCPTuple
-	src      common.Endpoint
-	dst      common.Endpoint
-	ts       time.Time
-	endTime  time.Time
-	query    string
-	method   string
-	path     string // for mysql, Path refers to the mysql table queried
-	bytesOut uint64
-	bytesIn  uint64
-	notes    []string
-	isError  bool
+	tuple       common.TCPTuple
+	src         common.Endpoint
+	dst         common.Endpoint
+	ts          time.Time
+	endTime     time.Time
+	elapsedTime time.Duration
+	query       string
+	method      string
+	path        string // for mysql, Path refers to the mysql table queried
+	bytesOut    uint64
+	bytesIn     uint64
+	notes       []string
+	isError     bool
 
 	mysql common.MapStr
 
@@ -150,8 +197,10 @@ type mysqlPlugin struct {
 	sendRequest  bool
 	sendResponse bool
 
-	transactions       *common.Cache
-	transactionTimeout time.Duration
+	traffics            *common.Cache
+	aliveTrafficTimeout time.Duration
+	transactions        *common.Cache
+	transactionTimeout  time.Duration
 
 	// prepare statements cache
 	prepareStatements       *common.Cache
@@ -197,6 +246,11 @@ func (mysql *mysqlPlugin) init(results protos.Reporter, watcher procs.ProcessesW
 		protos.DefaultTransactionHashSize)
 	mysql.transactions.StartJanitor(mysql.transactionTimeout)
 
+	mysql.traffics = common.NewCache(
+		mysql.aliveTrafficTimeout,
+		protos.DefaultTransactionHashSize)
+	mysql.traffics.StartJanitor(mysql.aliveTrafficTimeout)
+
 	// prepare statements cache
 	mysql.prepareStatements = common.NewCache(
 		mysql.prepareStatementTimeout,
@@ -218,12 +272,28 @@ func (mysql *mysqlPlugin) setFromConfig(config *mysqlConfig) {
 	mysql.sendResponse = config.SendResponse
 	mysql.transactionTimeout = config.TransactionTimeout
 	mysql.prepareStatementTimeout = config.StatementTimeout
+	mysql.aliveTrafficTimeout = config.AliveTimeOut
 }
 
 func (mysql *mysqlPlugin) getTransaction(k common.HashableTCPTuple) *mysqlTransaction {
 	v := mysql.transactions.Get(k)
 	if v != nil {
 		return v.(*mysqlTransaction)
+	}
+	return nil
+}
+
+type mysqlTrafficSet struct {
+	tuple  common.TCPTuple
+	DB     string
+	User   string
+	Status uint8
+}
+
+func (mysql *mysqlPlugin) getTraffic(k uint64) *mysqlTrafficSet {
+	v := mysql.traffics.Get(k)
+	if v != nil {
+		return v.(*mysqlTrafficSet)
 	}
 	return nil
 }
@@ -272,7 +342,11 @@ func isRequest(typ uint8) bool {
 	return false
 }
 
-func mysqlMessageParser(s *mysqlStream) (bool, bool) {
+func containsQuit(typ uint8) bool {
+	return typ == mysqlCmdQuit
+}
+
+func mysqlMessageParser(s *mysqlStream, mysql *mysqlPlugin, traffic *mysqlTrafficSet) (bool, bool) {
 	logp.Debug("mysqldetailed", "MySQL parser called. parseState = %s", s.parseState)
 
 	m := s.message
@@ -300,6 +374,10 @@ func mysqlMessageParser(s *mysqlStream) (bool, bool) {
 					m.start = s.parseOffset
 					s.parseState = mysqlStateEatMessage
 				} else {
+					// add by ytl
+					if containsQuit(m.typ) {
+						mysql.traffics.Delete(traffic.tuple.ConnectID())
+					}
 					// ignore command
 					m.ignoreMessage = true
 					s.parseState = mysqlStateEatMessage
@@ -592,7 +670,32 @@ func (mysql *mysqlPlugin) Parse(pkt *protos.Packet, tcptuple *common.TCPTuple,
 			stream.message = &mysqlMessage{ts: pkt.Ts}
 		}
 
-		ok, complete := mysqlMessageParser(priv.data[dir])
+		//mysql add by ytl
+		traffic := mysql.getTraffic(tcptuple.ConnectID())
+		if traffic == nil {
+			traffic = &mysqlTrafficSet{
+				tuple: *tcptuple,
+				DB:     "unknown",
+				User:   "unknown",
+				Status: statusIncomplete,
+			}
+			mysql.traffics.Put(tcptuple.ConnectID(), traffic)
+			err := mysql.TryParseInitialHandshake(stream)
+			if err == nil {
+				traffic.Status = statusInitialHandshake
+			}
+		} else {
+			if traffic.Status == statusInitialHandshake && stream.isClient {
+				info, err := mysql.TryReadHandshakeReq(stream)
+				if err == nil {
+					traffic.User = info.User
+					traffic.DB = info.Database
+				}
+				traffic.Status = statusDone
+			}
+		}
+
+		ok, complete := mysqlMessageParser(priv.data[dir], mysql, traffic)
 		logp.Debug("mysqldetailed", "mysqlMessageParser returned ok=%v complete=%v", ok, complete)
 		if !ok {
 			// drop this tcp stream. Will retry parsing with the next
@@ -715,6 +818,7 @@ func (mysql *mysqlPlugin) receivedMysqlRequest(msg *mysqlMessage) {
 			delete(stmts, trans.statementID)
 			trans.query = "CmdStmtClose"
 			mysql.transactions.Delete(tuple.Hashable())
+			mysql.traffics.Delete(tuple.ConnectID())
 		}
 	} else {
 		trans.query = msg.query
@@ -750,6 +854,14 @@ func (mysql *mysqlPlugin) receivedMysqlResponse(msg *mysqlMessage) {
 		unmatchedResponses.Add(1)
 		return
 	}
+
+	traffic := mysql.getTraffic(msg.tcpTuple.ConnectID())
+	if traffic == nil {
+		logp.Debug("mysql", "Response from unknown traffic. Ignoring.")
+		unmatchedResponses.Add(1)
+		return
+	}
+
 	// check if the request was received
 	if trans.mysql == nil {
 		logp.Debug("mysql", "Response from unknown transaction. Ignoring.")
@@ -790,6 +902,7 @@ func (mysql *mysqlPlugin) receivedMysqlResponse(msg *mysqlMessage) {
 	trans.bytesOut = msg.size
 	trans.path = msg.tables
 	trans.endTime = msg.ts
+	trans.elapsedTime = trans.endTime.Sub(trans.ts)
 
 	// save Raw message
 	if len(msg.raw) > 0 {
@@ -800,7 +913,16 @@ func (mysql *mysqlPlugin) receivedMysqlResponse(msg *mysqlMessage) {
 
 	trans.notes = append(trans.notes, msg.notes...)
 
-	mysql.publishTransaction(trans)
+
+	//add by ytl
+	if trans.isError == false && strings.Contains(strings.ToUpper(trans.method), "USE") {
+		sql := trans.query
+		sql = strings.Trim(sql, " ")
+		db := sql[strings.LastIndex(sql, " "):]
+		traffic.DB = db
+	}
+
+	mysql.publishTransaction(trans, traffic)
 	mysql.transactions.Delete(trans.tuple.Hashable())
 
 	logp.Debug("mysql", "Mysql transaction completed: %s %s %s", trans.query, trans.params, trans.mysql)
@@ -1150,32 +1272,41 @@ func (mysql *mysqlPlugin) parseMysqlResponse(data []byte) ([]string, [][]string)
 	return fields, rows
 }
 
-func (mysql *mysqlPlugin) publishTransaction(t *mysqlTransaction) {
+func (mysql *mysqlPlugin) publishTransaction(t *mysqlTransaction, traffic *mysqlTrafficSet) {
 	if mysql.results == nil {
 		return
 	}
 
 	logp.Debug("mysql", "mysql.results exists")
 
-	evt, pbf := pb.NewBeatEvent(t.ts)
-	pbf.SetSource(&t.src)
-	pbf.AddIP(t.src.IP)
-	pbf.SetDestination(&t.dst)
-	pbf.AddIP(t.dst.IP)
-	pbf.Source.Bytes = int64(t.bytesIn)
-	pbf.Destination.Bytes = int64(t.bytesOut)
-	pbf.Event.Dataset = "mysql"
-	pbf.Event.Start = t.ts
-	pbf.Event.End = t.endTime
-	pbf.Network.Transport = "tcp"
-	pbf.Network.Protocol = "mysql"
-	pbf.Error.Message = t.notes
+	evt, _ := pb.NewBeatEvent(t.ts)
+	//pbf.SetSource(&t.src)
+	//pbf.AddIP(t.src.IP)
+	//pbf.SetDestination(&t.dst)
+	//pbf.AddIP(t.dst.IP)
+	//pbf.Source.Bytes = int64(t.bytesIn)
+	//pbf.Destination.Bytes = int64(t.bytesOut)
+	//pbf.Event.Dataset = "mysql"
+	//pbf.Event.Start = t.ts
+	//pbf.Event.End = t.endTime
+	//pbf.Network.Transport = "tcp"
+	//pbf.Network.Protocol = "mysql"
+	//pbf.Error.Message = t.notes
 
 	fields := evt.Fields
-	fields["type"] = pbf.Event.Dataset
+	fields["type"] = "mysql"
 	fields["method"] = t.method
-	fields["query"] = t.query
+	fields["Statement"] = t.query
 	fields["mysql"] = t.mysql
+	fields["DB"] = traffic.DB
+	fields["User"] = traffic.User
+	fields["ElapsedTime"] = t.elapsedTime.Milliseconds()
+	fields["ExecutedAt"] = t.ts
+	fields["SrcIp"] = t.src.IP
+	fields["SrcPort"] = t.src.Port
+	fields["DstIp"] = t.dst.IP
+	fields["DstPort"] = t.dst.Port
+
 	if len(t.path) > 0 {
 		fields["path"] = t.path
 	}
@@ -1184,9 +1315,9 @@ func (mysql *mysqlPlugin) publishTransaction(t *mysqlTransaction) {
 	}
 
 	if t.isError {
-		fields["status"] = common.ERROR_STATUS
+		fields["Status"] = common.ERROR_STATUS
 	} else {
-		fields["status"] = common.OK_STATUS
+		fields["Status"] = common.OK_STATUS
 	}
 
 	if mysql.sendRequest {
@@ -1197,6 +1328,99 @@ func (mysql *mysqlPlugin) publishTransaction(t *mysqlTransaction) {
 	}
 
 	mysql.results(evt)
+}
+
+func (mysql *mysqlPlugin) TryParseInitialHandshake(s *mysqlStream) error {
+	if len(s.data) <= 5 {
+		return errors.New("read initial handshake error: nil")
+	}
+	if s.data[4] == ErrHeader {
+		return errors.New("read initial handshake error")
+	}
+
+	if s.data[4] < MinProtocolVersion {
+		return fmt.Errorf("invalid protocol version %d, must >= 10", s.data[0])
+	}
+	return nil
+}
+
+// HandshakeResponseInfo handshake response information
+type HandshakeResponseInfo struct {
+	User         string
+	AuthResponse []byte
+	Salt         []byte
+	Database     string
+}
+
+func (mysql *mysqlPlugin) TryReadHandshakeReq(s *mysqlStream) (*HandshakeResponseInfo, error) {
+	info := &HandshakeResponseInfo{}
+	if len(s.data) <= 5 {
+		return nil, errors.New("read initial handshake error: nil")
+	}
+	data := s.data[4:]
+
+	pos := 0
+
+	// Client flags, 4 bytes.
+	var ok bool
+	var capability uint32
+	capability, pos, ok = ReadUint32(data, pos)
+	if !ok {
+		return info, fmt.Errorf("readHandshakeResponse: can't read client flags")
+	}
+	if capability&ClientProtocol41 == 0 {
+		return info, fmt.Errorf("readHandshakeResponse: only support protocol 4.1")
+	}
+
+	// Max packet size. Don't do anything with this now.
+	_, pos, ok = ReadUint32(data, pos)
+	if !ok {
+		return info, fmt.Errorf("readHandshakeResponse: can't read maxPacketSize")
+	}
+
+	// Character set
+	_, pos, ok = ReadByte(data, pos)
+	if !ok {
+		return info, fmt.Errorf("readHandshakeResponse: can't read characterSet")
+	}
+
+	// reserved 23 zero bytes, skipped
+	pos += 23
+
+	// username
+	var user string
+	user, pos, ok = ReadNullString(data, pos)
+	if !ok {
+		return info, fmt.Errorf("readHandshakeResponse: can't read username")
+	}
+	info.User = user
+
+	// TODO auth-response can have three forms.
+	var authResponse []byte
+	var l uint64
+	l, pos, _, ok = ReadLenEncInt(data, pos)
+	if !ok {
+		return info, fmt.Errorf("readHandshakeResponse: can't read auth-response variable length")
+	}
+	authResponse, pos, ok = ReadBytesCopy(data, pos, int(l))
+	if !ok {
+		return info, fmt.Errorf("readHandshakeResponse: can't read auth-response")
+	}
+
+	info.AuthResponse = authResponse
+
+	// check if with database
+	if capability&ClientConnectWithDB > 0 {
+		var db string
+		db, pos, ok = ReadNullString(data, pos)
+		if !ok {
+			return info, fmt.Errorf("readHandshakeResponse: can't read db")
+		}
+		info.Database = db
+	}
+
+	// TODO auth plugin name client conn attrs .etc
+	return info, nil
 }
 
 func readLstring(data []byte, offset int) ([]byte, int, bool, error) {
@@ -1251,4 +1475,85 @@ func readLength(data []byte, offset int) (int, error) {
 		return 0, errors.New("data too small to contain a valid length")
 	}
 	return int(leUint24(data[offset : offset+3])), nil
+}
+
+// ReadUint32 read uint32 from []byte
+func ReadUint32(data []byte, pos int) (uint32, int, bool) {
+	if pos+3 >= len(data) {
+		return 0, 0, false
+	}
+	return binary.LittleEndian.Uint32(data[pos : pos+4]), pos + 4, true
+}
+
+// ReadByte read one byte from []byte
+func ReadByte(data []byte, pos int) (byte, int, bool) {
+	if pos >= len(data) {
+		return 0, 0, false
+	}
+	return data[pos], pos + 1, true
+}
+
+// ReadNullString read Null terminated string from []byte, return string,pos,if end.
+func ReadNullString(data []byte, pos int) (string, int, bool) {
+	end := bytes.IndexByte(data[pos:], 0)
+	if end == -1 {
+		return "", 0, false
+	}
+	return string(data[pos : pos+end]), pos + end + 1, true
+}
+
+// ReadLenEncInt read info of len encoded int, return length, next pos(skip len self to data), is null, handle result
+// https://dev.mysql.com/doc/internals/en/integer.html#packet-Protocol::FixedLengthInteger
+func ReadLenEncInt(data []byte, pos int) (uint64, int, bool, bool) {
+	isNull := false
+	if pos >= len(data) {
+		return 0, 0, isNull, false
+	}
+	switch data[pos] {
+	// 251: NULL
+	case 0xfb:
+		isNull = true
+		return 0, pos + 1, isNull, true
+	case 0xfc:
+		// Encoded in the next 2 bytes.
+		if pos+2 >= len(data) {
+			return 0, 0, isNull, false
+		}
+		return uint64(data[pos+1]) |
+			uint64(data[pos+2])<<8, pos + 3, isNull, true
+	case 0xfd:
+		// Encoded in the next 3 bytes.
+		if pos+3 >= len(data) {
+			return 0, 0, isNull, false
+		}
+		return uint64(data[pos+1]) |
+			uint64(data[pos+2])<<8 |
+			uint64(data[pos+3])<<16, pos + 4, isNull, true
+	case 0xfe:
+		// Encoded in the next 8 bytes.
+		if pos+8 >= len(data) {
+			return 0, 0, isNull, false
+		}
+		return uint64(data[pos+1]) |
+			uint64(data[pos+2])<<8 |
+			uint64(data[pos+3])<<16 |
+			uint64(data[pos+4])<<24 |
+			uint64(data[pos+5])<<32 |
+			uint64(data[pos+6])<<40 |
+			uint64(data[pos+7])<<48 |
+			uint64(data[pos+8])<<56, pos + 9, isNull, true
+	}
+	// 0-250
+	return uint64(data[pos]), pos + 1, isNull, true
+}
+
+// ReadBytesCopy returns a copy of the bytes in the packet.
+// Useful to remember contents of ephemeral packets.
+func ReadBytesCopy(data []byte, pos int, size int) ([]byte, int, bool) {
+	if pos+size-1 >= len(data) {
+		return nil, 0, false
+	}
+	result := make([]byte, size)
+	copy(result, data[pos:pos+size])
+	return result, pos + size, true
 }

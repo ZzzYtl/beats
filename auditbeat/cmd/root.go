@@ -60,8 +60,8 @@ func AuditbeatSettings() instance.Settings {
 	return instance.Settings{
 		RunFlags:      runFlags,
 		Name:          Name,
-		HasDashboards: true,
-		Processing:    processing.MakeDefaultSupport(true, withECSVersion, processing.WithHost, processing.WithAgentMeta()),
+		HasDashboards: true,											//modify by ytl
+		Processing:    processing.MakeDefaultSupport(true, /*withECSVersion, processing.WithHost, processing.WithAgentMeta()*/),
 	}
 }
 

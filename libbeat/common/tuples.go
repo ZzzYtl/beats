@@ -107,6 +107,7 @@ type TCPTuple struct {
 	StreamID uint32
 
 	raw HashableTCPTuple // Src_ip:Src_port:Dst_ip:Dst_port:stream_id
+	connectID    uint64
 }
 
 func TCPTupleFromIPPort(t *IPPortTuple, streamID uint32) TCPTuple {
@@ -121,6 +122,7 @@ func TCPTupleFromIPPort(t *IPPortTuple, streamID uint32) TCPTuple {
 		StreamID: streamID,
 	}
 	tuple.ComputeHashables()
+	tuple.ComputeDHashables()
 
 	return tuple
 }
@@ -132,6 +134,24 @@ func (t *TCPTuple) ComputeHashables() {
 	copy(t.raw[34:36], []byte{byte(t.DstPort >> 8), byte(t.DstPort)})
 	copy(t.raw[36:40], []byte{byte(t.StreamID >> 24), byte(t.StreamID >> 16),
 		byte(t.StreamID >> 8), byte(t.StreamID)})
+}
+
+func fnvHash(s []byte) (h uint64) {
+	h = fnvBasis
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= fnvPrime
+	}
+	return
+}
+
+const fnvBasis = 14695981039346656037
+const fnvPrime = 1099511628211
+
+func (t *TCPTuple) ComputeDHashables() {
+	t.connectID = fnvHash(t.raw[:(MaxTCPTupleRawSize - 4)/2]) + fnvHash(t.raw[(MaxTCPTupleRawSize - 4)/ 2:MaxTCPTupleRawSize - 4])
+	t.connectID *= fnvPrime
+	return
 }
 
 func (t TCPTuple) String() string {
@@ -154,6 +174,10 @@ func (t TCPTuple) IPPort() *IPPortTuple {
 // the TCP tuple.
 func (t *TCPTuple) Hashable() HashableTCPTuple {
 	return t.raw
+}
+
+func (t *TCPTuple) ConnectID() uint64 {
+	return t.connectID
 }
 
 // ProcessTuple contains the source and destination process names, as found by

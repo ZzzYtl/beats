@@ -42,6 +42,7 @@ type meta struct {
 
 func makeEvent(index, version string, in *beat.Event) event {
 	return event{
+		//by ytl
 		Timestamp: in.Timestamp,
 		Meta: meta{
 			Beat:    index,

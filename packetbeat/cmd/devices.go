@@ -32,12 +32,12 @@ func genDevicesCommand() *cobra.Command {
 		Use:   "devices",
 		Short: "List available devices",
 		Run: func(cmd *cobra.Command, args []string) {
-			printDevicesList()
+			PrintDevicesList()
 		},
 	}
 }
 
-func printDevicesList() {
+func PrintDevicesList() {
 	lst, err := sniffer.ListDeviceNames(true, true)
 	if err != nil {
 		log.Fatalf("Error getting devices list: %v\n", err)

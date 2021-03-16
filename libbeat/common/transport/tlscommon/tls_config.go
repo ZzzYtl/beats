@@ -109,7 +109,7 @@ func (c *TLSConfig) ToConfig() *tls.Config {
 		Renegotiation:      c.Renegotiation,
 		ClientAuth:         c.ClientAuth,
 		Time:               c.time,
-		VerifyConnection:   makeVerifyConnection(c),
+		//VerifyConnection:   makeVerifyConnection(c),
 	}
 }
 
@@ -120,9 +120,9 @@ func (c *TLSConfig) BuildModuleClientConfig(host string) *tls.Config {
 		return &tls.Config{
 			ServerName:         host,
 			InsecureSkipVerify: true,
-			VerifyConnection: makeVerifyConnection(&TLSConfig{
-				Verification: VerifyFull,
-			}),
+			//VerifyConnection: makeVerifyConnection(&TLSConfig{
+			//	Verification: VerifyFull,
+			//}),
 		}
 	}
 
@@ -138,15 +138,15 @@ func (c *TLSConfig) BuildServerConfig(host string) *tls.Config {
 		return &tls.Config{
 			ServerName:         host,
 			InsecureSkipVerify: true,
-			VerifyConnection: makeVerifyServerConnection(&TLSConfig{
-				Verification: VerifyFull,
-			}),
+			//VerifyConnection: makeVerifyServerConnection(&TLSConfig{
+			//	Verification: VerifyFull,
+			//}),
 		}
 	}
 
 	config := c.ToConfig()
 	config.ServerName = host
-	config.VerifyConnection = makeVerifyServerConnection(c)
+	//config.VerifyConnection = makeVerifyServerConnection(c)
 	return config
 }
 
