@@ -84,6 +84,8 @@ type InterfacesConfig struct {
 	BufferSizeMb          int      `config:"buffer_size_mb"`
 	EnableAutoPromiscMode bool     `config:"auto_promisc_mode"`
 	InternalNetworks      []string `config:"internal_networks"`
+	CpuThreshold          float64  `config:"cpu_threshold"`
+	MemThreshold          float64  `config:"mem_threshold"`
 	TopSpeed              bool
 	Dumpfile              string
 	OneAtATime            bool

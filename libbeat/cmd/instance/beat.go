@@ -592,7 +592,7 @@ func (b *Beat) configure(settings Settings) error {
 
 	b.InputQueueSize = settings.InputQueueSize
 
-	cfg, err := cfgfile.Load("", settings.ConfigOverrides)
+	cfg, err := cfgfile.Load("../conf/config.yml", settings.ConfigOverrides)
 	if err != nil {
 		return fmt.Errorf("error loading config file: %v", err)
 	}

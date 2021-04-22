@@ -66,7 +66,7 @@ func mergePathDefaults(c *common.Config) (*common.Config, error) {
 			"home":   paths.Paths.Home,
 			"config": "${path.home}",
 			"data":   filepath.Join("${path.home}", "data"),
-			"logs":   filepath.Join("${path.home}", "logs"),
+			"logs":   filepath.Join("${path.home}", "log"),
 		},
 	})
 	if err := defaults.Merge(c); err != nil {

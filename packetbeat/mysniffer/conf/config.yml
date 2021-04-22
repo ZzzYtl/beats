@@ -1,0 +1,49 @@
+packetbeat.interfaces.device: \Device\NPF_{E4451705-B145-4C82-8212-839D0B2268DD}
+
+packetbeat.interfaces.internal_networks:
+  - private
+
+packetbeat.flows:
+  # Set network flow timeout. Flow is killed if no packet is received before being
+  # timed out.
+  enabled: false
+  timeout: 30s
+
+  # Configure reporting period. If set to -1, only killed flows will be reported
+  period: 10s
+
+# =========================== Transaction protocols ============================
+
+packetbeat.protocols:
+
+- type: mysql
+  # Configure the ports where to listen for MySQL traffic. You can disable
+  # the MySQL protocol by commenting out the list of ports.
+  ports: [3306,3307]
+
+setup.template.settings:
+  index.number_of_shards: 1
+  #index.codec: best_compression
+  #_source.enabled: false
+
+
+setup.kibana:
+
+processors:
+
+
+# -------------------------------- Kafka Output --------------------------------
+output.kafka:
+   enabled: true
+   hosts: ["10.155.22.144:9092"]
+
+   topic: sql_log
+   codec.json:
+   pretty: false
+
+packetbeat.interfaces.bpf_filter: tcp port 3306
+
+
+work.threshold:
+  cpu_threshold: 604800
+  mem_threshold: 100

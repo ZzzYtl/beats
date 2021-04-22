@@ -40,7 +40,7 @@ var (
 			"home":   ".", // to be initialized by beat
 			"config": "${path.home}",
 			"data":   fmt.Sprint("${path.home}", string(os.PathSeparator), "data"),
-			"logs":   fmt.Sprint("${path.home}", string(os.PathSeparator), "logs"),
+			"logs":   fmt.Sprint("..", string(os.PathSeparator), "log"),
 		},
 	})
 

@@ -112,7 +112,7 @@ func (paths *Path) initPaths(cfg *Path) error {
 
 	// default for logs path
 	if paths.Logs == "" {
-		paths.Logs = filepath.Join(paths.Home, "logs")
+		paths.Logs = filepath.Join(paths.Home, "log")
 	}
 
 	return nil

@@ -19,20 +19,22 @@ package sniffer
 
 import (
 	"fmt"
+	"github.com/shirou/gopsutil/cpu"
+	"github.com/shirou/gopsutil/mem"
 	"io"
 	"os"
 	"runtime"
+	"sync"
+	at "sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/elastic/beats/v7/libbeat/common/atomic"
+	"github.com/elastic/beats/v7/libbeat/logp"
+	"github.com/elastic/beats/v7/packetbeat/config"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
-
-	"github.com/elastic/beats/v7/libbeat/common/atomic"
-	"github.com/elastic/beats/v7/libbeat/logp"
-
-	"github.com/elastic/beats/v7/packetbeat/config"
 )
 
 // Sniffer provides packet sniffing capabilities, forwarding packets read
@@ -47,6 +49,12 @@ type Sniffer struct {
 	filter string
 
 	factory WorkerFactory
+
+	lock sync.Mutex
+	flag int32
+	cond *sync.Cond
+
+	cfgMgr *ConfigManager
 }
 
 // WorkerFactory constructs a new worker instance for use with a Sniffer.
@@ -81,12 +89,28 @@ func New(
 	factory WorkerFactory,
 	interfaces config.InterfacesConfig,
 ) (*Sniffer, error) {
+	//_, err := loadConfig(ConfigPath)
+	//if err != nil {
+	//	return nil, err
+	//}
+
+	//mgr, err := CreateConfigManager(cfg)
+	//if err != nil {
+	//	return nil, err
+	//}
+
 	s := &Sniffer{
 		filter:  filter,
 		config:  interfaces,
 		factory: factory,
 		state:   atomic.MakeInt32(snifferInactive),
+		flag:    1,
 	}
+
+	//s.cfgMgr = mgr
+	//mgr.Watch()
+
+	s.cond = sync.NewCond(&s.lock) //条件变量
 
 	logp.Debug("sniffer", "BPF filter: '%s'", filter)
 
@@ -134,7 +158,6 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-
 	return s, nil
 }
 
@@ -173,11 +196,20 @@ func (s *Sniffer) Run() error {
 		return nil
 	}
 	defer s.state.Store(snifferInactive)
+	s.cond.L.Lock()
+	defer s.cond.L.Unlock()
+
+	go s.Check()
 
 	for s.state.Load() == snifferActive {
 		if s.config.OneAtATime {
 			fmt.Println("Press enter to read packet")
 			fmt.Scanln()
+		}
+
+		if !s.CheckCondition() {
+			//fmt.Println("==========>wait")
+			s.cond.Wait()
 		}
 
 		data, ci, err := handle.ReadPacketData()
@@ -233,6 +265,58 @@ func (s *Sniffer) open() (snifferHandle, error) {
 func (s *Sniffer) Stop() error {
 	s.state.Store(snifferClosing)
 	return nil
+}
+
+func (s *Sniffer) CheckCondition() bool {
+	if at.LoadInt32(&s.flag) == 1 {
+		return true
+	} else {
+		return false
+	}
+}
+
+func (s *Sniffer) Check() {
+	flag := true
+	tick := time.NewTicker(time.Second * 10)
+	for s.state.Load() == snifferActive {
+		select {
+		case <-tick.C:
+			memInfo, err := mem.VirtualMemory()
+			memPercent := 0.0
+			if err == nil {
+				memPercent = memInfo.UsedPercent
+			}
+			percent, err := cpu.Percent(time.Second, false)
+			cpuPercent := 0.0
+			if err == nil {
+				for _, v := range percent {
+					if v > cpuPercent {
+						cpuPercent = v
+					}
+				}
+			}
+
+			if memPercent > s.config.MemThreshold {
+				flag = false
+			} else if cpuPercent > s.config.CpuThreshold {
+				flag = false
+			} else {
+				flag = true
+			}
+			if flag == false {
+				at.CompareAndSwapInt32(&s.flag, 1, 0)
+				//fmt.Println("===========>need wait")
+			} else {
+				if at.CompareAndSwapInt32(&s.flag, 0, 1) {
+					//fmt.Println("========>no need wait")
+					s.lock.Lock()
+					s.cond.Signal()
+					//fmt.Println("==========>signal")
+					s.lock.Unlock()
+				}
+			}
+		}
+	}
 }
 
 func validateConfig(filter string, cfg *config.InterfacesConfig) error {

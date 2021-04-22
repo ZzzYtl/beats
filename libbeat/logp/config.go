@@ -69,6 +69,7 @@ func DefaultConfig(environment Environment) Config {
 			Permissions:     0600,
 			Interval:        0,
 			RotateOnStartup: true,
+			Name: "mysniffer",
 		},
 		environment: environment,
 		addCaller:   true,

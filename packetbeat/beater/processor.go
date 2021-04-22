@@ -66,7 +66,6 @@ func (p *processor) Start() {
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-
 		err := p.sniffer.Run()
 		if err != nil {
 			p.err <- fmt.Errorf("sniffer loop failed: %v", err)
@@ -74,6 +73,7 @@ func (p *processor) Start() {
 		}
 		p.err <- nil
 	}()
+	//go p.sniffer.Check()
 }
 
 func (p *processor) Stop() {
