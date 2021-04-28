@@ -27,7 +27,7 @@ import (
 )
 
 func setupLinuxBSDFDMetrics() {
-	monitoring.NewFunc(beatMetrics, "handles", reportFDUsage, monitoring.Report)
+	//monitoring.NewFunc(beatMetrics, "handles", reportFDUsage, monitoring.Report)
 }
 
 func reportFDUsage(_ monitoring.Mode, V monitoring.Visitor) {

@@ -355,7 +355,7 @@ func mysqlMessageParser(s *mysqlStream, mysql *mysqlPlugin, traffic *mysqlTraffi
 		case mysqlStateStart:
 			m.start = s.parseOffset
 			if len(s.data[s.parseOffset:]) < 5 {
-				logp.Warn("MySQL Message too short. Ignore it.")
+				//logp.Warn("MySQL Message too short. Ignore it.")
 				return false, false
 			}
 			hdr := s.data[s.parseOffset : s.parseOffset+5]

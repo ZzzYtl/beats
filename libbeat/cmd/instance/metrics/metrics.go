@@ -68,9 +68,9 @@ func SetupMetrics(name string) error {
 		return err
 	}
 
-	monitoring.NewFunc(beatMetrics, "memstats", reportMemStats, monitoring.Report)
-	monitoring.NewFunc(beatMetrics, "cpu", reportBeatCPU, monitoring.Report)
-	monitoring.NewFunc(beatMetrics, "runtime", reportRuntime, monitoring.Report)
+	//monitoring.NewFunc(beatMetrics, "memstats", reportMemStats, monitoring.Report)
+	//monitoring.NewFunc(beatMetrics, "cpu", reportBeatCPU, monitoring.Report)
+	//monitoring.NewFunc(beatMetrics, "runtime", reportRuntime, monitoring.Report)
 
 	setupPlatformSpecificMetrics()
 

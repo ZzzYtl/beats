@@ -1,7 +1,14 @@
-packetbeat.interfaces.device: \Device\NPF_{E4451705-B145-4C82-8212-839D0B2268DD}
+# packetbeat.interfaces.device: \Device\NPF_{E4451705-B145-4C82-8212-839D0B2268DD}
 
+packetbeat.interfaces.device: any
 packetbeat.interfaces.internal_networks:
   - private
+
+packetbeat.interfaces.bpf_filter: tcp port 3306
+
+# 50.6% 为50.6
+packetbeat.interfaces.cpu_threshold: 50.6
+packetbeat.interfaces.mem_threshold: 50.7
 
 packetbeat.flows:
   # Set network flow timeout. Flow is killed if no packet is received before being
@@ -40,10 +47,3 @@ output.kafka:
    topic: sql_log
    codec.json:
    pretty: false
-
-packetbeat.interfaces.bpf_filter: tcp port 3306
-
-
-work.threshold:
-  cpu_threshold: 604800
-  mem_threshold: 100

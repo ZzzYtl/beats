@@ -208,7 +208,6 @@ func (s *Sniffer) Run() error {
 		}
 
 		if !s.CheckCondition() {
-			//fmt.Println("==========>wait")
 			s.cond.Wait()
 		}
 
@@ -305,10 +304,10 @@ func (s *Sniffer) Check() {
 			}
 			if flag == false {
 				at.CompareAndSwapInt32(&s.flag, 1, 0)
-				//fmt.Println("===========>need wait")
+				logp.Warn("===========>stop capture!!!")
 			} else {
 				if at.CompareAndSwapInt32(&s.flag, 0, 1) {
-					//fmt.Println("========>no need wait")
+					logp.Warn("========>start capture!!!")
 					s.lock.Lock()
 					s.cond.Signal()
 					//fmt.Println("==========>signal")
