@@ -19,6 +19,9 @@ package beater
 
 import (
 	"fmt"
+	"github.com/elastic/beats/v7/libbeat/processors/util"
+	"github.com/elastic/beats/v7/packetbeat/pb"
+	"runtime"
 	"sync"
 	"time"
 
@@ -36,22 +39,26 @@ import (
 	"github.com/elastic/beats/v7/packetbeat/sniffer"
 )
 
+
+
 type processor struct {
 	wg              sync.WaitGroup
 	publisher       *publish.TransactionPublisher
 	flows           *flows.Flows
 	sniffer         *sniffer.Sniffer
+	report 			*Reporter
 	shutdownTimeout time.Duration
 	err             chan error
 }
 
-func newProcessor(shutdownTimeout time.Duration, publisher *publish.TransactionPublisher, flows *flows.Flows, sniffer *sniffer.Sniffer, err chan error) *processor {
+func newProcessor(shutdownTimeout time.Duration, publisher *publish.TransactionPublisher, flows *flows.Flows, sniffer *sniffer.Sniffer, report *Reporter, err chan error) *processor {
 	return &processor{
 		publisher:       publisher,
 		flows:           flows,
 		sniffer:         sniffer,
 		err:             err,
 		shutdownTimeout: shutdownTimeout,
+		report: report,
 	}
 }
 
@@ -73,6 +80,7 @@ func (p *processor) Start() {
 		}
 		p.err <- nil
 	}()
+	p.report.Start()
 	//go p.sniffer.Check()
 }
 
@@ -88,6 +96,7 @@ func (p *processor) Stop() {
 		time.Sleep(p.shutdownTimeout)
 	}
 	p.publisher.Stop()
+	p.report.Stop()
 }
 
 type processorFactory struct {
@@ -146,12 +155,18 @@ func (p *processorFactory) Create(pipeline beat.PipelineConnector, cfg *common.C
 	if err != nil {
 		return nil, err
 	}
+
+	report, err := createReporter(config, publisher)
+	if err != nil {
+		return nil, err
+	}
+
 	sniffer, err := setupSniffer(config, protocols, workerFactory(publisher, protocols, watcher, flows, config))
 	if err != nil {
 		return nil, err
 	}
 
-	return newProcessor(config.ShutdownTimeout, publisher, flows, sniffer, p.err), nil
+	return newProcessor(config.ShutdownTimeout, publisher, flows, sniffer, report, p.err), nil
 }
 
 func (p *processorFactory) CheckConfig(config *common.Config) error {
@@ -161,4 +176,72 @@ func (p *processorFactory) CheckConfig(config *common.Config) error {
 	}
 	runner.Stop()
 	return nil
+}
+
+type Reporter struct {
+	//add by ytl
+	reportTemplate int
+	reportTopic    string
+	startTime      time.Time
+	results 	   protos.Reporter
+	done      	   chan struct{}
+	ticker         *time.Ticker
+}
+
+func (report *Reporter) publishInfo() {
+	evt, _ := pb.NewBeatEvent(time.Now())
+	fields := evt.Fields
+	fields["type"] = "report"
+	fields["topic"] = report.reportTopic
+	ipList, hwList, err := util.GetEffectiveNetInfo()
+	if err == nil {
+		if len(ipList) != 0 {
+			fields["Ip"] = ipList[0]
+		}
+		if len(hwList) != 0 {
+			fields["Mac"] = hwList[0]
+		}
+	}
+
+	fields["OS"] = runtime.GOOS
+	duration := time.Now().Sub(report.startTime)
+	fields["RunTime"] = duration.Seconds()
+	fields["Template"] = report.reportTemplate
+	report.results(evt)
+
+}
+
+func (report *Reporter)Start()  {
+	go func(p *Reporter) {
+		for {
+			select {
+			case <-p.done:
+				return
+			case <-p.ticker.C:
+				report.publishInfo()
+			}
+		}
+	}(report)
+}
+
+func (report *Reporter)Stop()  {
+	close(report.done)
+}
+
+func createReporter(cfg config.Config, publisher *publish.TransactionPublisher) (*Reporter, error) {
+	report := Reporter{
+		reportTemplate: cfg.Report.Template,
+		reportTopic:    cfg.Report.Topic,
+		startTime:      time.Now(),
+		done: make(chan struct{}),
+		ticker : time.NewTicker(time.Second * 5),
+	}
+
+	config := common.NewConfig()
+	result, err := publisher.CreateReporter(config)
+	if err != nil {
+		return nil, err
+	}
+	report.results = result
+	return &report, nil
 }

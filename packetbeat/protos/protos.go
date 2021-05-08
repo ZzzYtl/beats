@@ -186,6 +186,8 @@ func (s ProtocolsStruct) configureProtocol(
 		}
 	}
 
+
+
 	inst, err := plugin(testMode, results, watcher, config)
 	if err != nil {
 		logp.Err("Failed to register protocol plugin: %v", err)

@@ -29,6 +29,7 @@ import (
 type Config struct {
 	Interfaces      InterfacesConfig          `config:"interfaces"`
 	Flows           *Flows                    `config:"flows"`
+	Report          Report                    `config:"report"`
 	Protocols       map[string]*common.Config `config:"protocols"`
 	ProtocolsList   []*common.Config          `config:"protocols"`
 	Procs           procs.ProcsConfig         `config:"procs"`
@@ -101,6 +102,11 @@ type Flows struct {
 	KeepNull      bool                    `config:"keep_null"`
 	// Index is used to overwrite the index where flows are published
 	Index string `config:"index"`
+}
+
+type Report struct {
+	Template int    `config:"template"`
+	Topic    string `config:"topic"`
 }
 
 type ProtocolCommon struct {

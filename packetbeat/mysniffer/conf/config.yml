@@ -1,4 +1,4 @@
-# packetbeat.interfaces.device: \Device\NPF_{E4451705-B145-4C82-8212-839D0B2268DD}
+#packetbeat.interfaces.device: \Device\NPF_{E4451705-B145-4C82-8212-839D0B2268DD}
 
 packetbeat.interfaces.device: any
 packetbeat.interfaces.internal_networks:
@@ -7,8 +7,11 @@ packetbeat.interfaces.internal_networks:
 packetbeat.interfaces.bpf_filter: tcp port 3306
 
 # 50.6% 为50.6
-packetbeat.interfaces.cpu_threshold: 50.6
-packetbeat.interfaces.mem_threshold: 50.7
+packetbeat.interfaces.cpu_threshold: 100
+packetbeat.interfaces.mem_threshold: 100
+
+packetbeat.report.template: 1
+packetbeat.report.topic: agent_info
 
 packetbeat.flows:
   # Set network flow timeout. Flow is killed if no packet is received before being

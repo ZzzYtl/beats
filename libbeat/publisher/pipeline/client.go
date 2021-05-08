@@ -122,6 +122,11 @@ func (c *client) publish(e beat.Event) {
 		Content: e,
 		Flags:   c.eventFlags,
 	}
+	//add by ytl
+	topic, err := e.GetValue("topic")
+	if err == nil {
+		pubEvent.Cache.Put("topic", topic)
+	}
 
 	if c.reportEvents {
 		c.pipeline.waitCloser.inc()

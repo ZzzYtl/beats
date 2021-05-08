@@ -40,7 +40,7 @@ import (
 const (
 	mysqlCmdQuit        = 1
 	mysqlCmdQuery       = 3
-	mysqlComPing		= 14
+	mysqlComPing        = 14
 	mysqlCmdStmtPrepare = 22
 	mysqlCmdStmtExecute = 23
 	mysqlCmdStmtClose   = 25
@@ -674,7 +674,7 @@ func (mysql *mysqlPlugin) Parse(pkt *protos.Packet, tcptuple *common.TCPTuple,
 		traffic := mysql.getTraffic(tcptuple.ConnectID())
 		if traffic == nil {
 			traffic = &mysqlTrafficSet{
-				tuple: *tcptuple,
+				tuple:  *tcptuple,
 				DB:     "unknown",
 				User:   "unknown",
 				Status: statusIncomplete,
@@ -912,7 +912,6 @@ func (mysql *mysqlPlugin) receivedMysqlResponse(msg *mysqlMessage) {
 	}
 
 	trans.notes = append(trans.notes, msg.notes...)
-
 
 	//add by ytl
 	if trans.isError == false && strings.Contains(strings.ToUpper(trans.method), "USE") {
